@@ -2,7 +2,10 @@
 
 A solitaire card game implementation optimized for e-ink displays, built with Kotlin.
 
-## 怎样下载？找到“Releases”页面，点击最新版本的“app-debug.apk“即可下载！
+## 怎样下载？
+## https://github.com/srdugjkhuh/solitare-for-e-ink/releases/download/release/app-debug.apk
+## ⬆️点击这里即可下载！
+或者找到“Releases”页面，点击最新版本的“app-debug.apk“即可下载！
 
 ## Overview
 

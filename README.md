@@ -2,6 +2,8 @@
 
 A solitaire card game implementation optimized for e-ink displays, built with Kotlin.
 
+## 怎样下载？找到“Release”页面，点击最新版本的“app-debug.apk“即可下载！
+
 ## Overview
 
 This project brings the classic card game of Solitaire to e-ink devices. E-ink displays present unique challenges for game development due to their low refresh rates and monochrome or limited color capabilities. This implementation is specifically designed to work efficiently on these constraints.

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "839400469976",
+    "project_id": "com-example-solitarefore-a4d11",
+    "storage_bucket": "com-example-solitarefore-a4d11.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:839400469976:android:a94fdf23bdb00dde646ead",
+        "android_client_info": {
+          "package_name": "com.example.solitarefore_ink"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDI0Ms_4MuURfjF33PTN1XJleS8juApLwQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

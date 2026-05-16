@@ -31,12 +31,29 @@ data class Card(
     val id: String get() = "${rank.symbol}${suit.symbol}"
 }
 
+enum class CardBackStyle {
+    CROSSHATCH,
+    HORIZONTAL_STRIPES,
+    VERTICAL_STRIPES,
+    CHECKERBOARD,
+    CONCENTRIC_RECTANGLES,
+    DIAGONAL_TL_BR,
+    DIAGONAL_BL_TR,
+    DOTS
+}
+
 data class GameState(
     val stock: List<Card> = emptyList(),
     val waste: List<Card> = emptyList(),
     val foundation: List<List<Card>> = List(4) { emptyList() },
     val tableau: List<List<Card>> = List(7) { emptyList() },
-    val isGameWon: Boolean = false
+    val isGameWon: Boolean = false,
+    val hintedCardId: String? = null,
+    val drawMode: Int = 1, // 1 or 3
+    val cardBackStyle: CardBackStyle = CardBackStyle.CROSSHATCH,
+    val score: Int = 0,
+    val elapsedSeconds: Int = 0,
+    val recycleCount: Int = 0
 )
 
 object DeckManager {

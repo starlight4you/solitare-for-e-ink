@@ -22,4 +22,8 @@ A solitaire card game implementation optimized for e-ink displays, built with Ko
 
 -横屏/竖屏切换
 
-在掌阅Ocean5Pro上测试通过
+适配Android7+，在掌阅Ocean5Pro和Smart X5 Ultra上测试通过
+
+更多墨水屏相关视频内容，欢迎关注Bilibili账号「可乐朋克」！
+
+Https://Space.bilibili.com/10603456

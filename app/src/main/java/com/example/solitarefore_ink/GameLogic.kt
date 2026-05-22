@@ -42,6 +42,12 @@ enum class CardBackStyle {
     DOTS
 }
 
+data class SelectedCardInfo(
+    val cardId: String,
+    val sourcePileType: PileType,
+    val sourcePileIndex: Int
+)
+
 data class GameState(
     val stock: List<Card> = emptyList(),
     val waste: List<Card> = emptyList(),
@@ -51,10 +57,30 @@ data class GameState(
     val hintedCardId: String? = null,
     val drawMode: Int = 1, // 1 or 3
     val cardBackStyle: CardBackStyle = CardBackStyle.CROSSHATCH,
+    val autoPlace: Boolean = true,
+    val autoComplete: Boolean = true,
+    val selectedCard: SelectedCardInfo? = null,
     val score: Int = 0,
     val elapsedSeconds: Int = 0,
     val recycleCount: Int = 0
-)
+) {
+    fun isCardSelected(card: Card, pileType: PileType, pileIndex: Int): Boolean {
+        val sel = selectedCard ?: return false
+        if (sel.sourcePileType != pileType) return false
+        if (pileType == PileType.WASTE || pileType == PileType.FOUNDATION) {
+            return sel.cardId == card.id
+        }
+        if (pileType == PileType.TABLEAU) {
+            if (sel.sourcePileIndex != pileIndex) return false
+            val pile = tableau.getOrNull(pileIndex) ?: return false
+            val selIndex = pile.indexOfFirst { it.id == sel.cardId }
+            if (selIndex == -1) return false
+            val cardIndex = pile.indexOf(card)
+            return cardIndex >= selIndex
+        }
+        return false
+    }
+}
 
 object DeckManager {
     fun createDeck(): List<Card> {

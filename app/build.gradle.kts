@@ -16,8 +16,8 @@ android {
         applicationId = "com.example.solitarefore_ink"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
@@ -65,6 +65,7 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation("com.google.code.gson:gson:2.14.0")
     implementation(libs.firebase.ai)
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))

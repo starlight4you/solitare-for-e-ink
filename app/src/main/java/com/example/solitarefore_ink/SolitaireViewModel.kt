@@ -1,6 +1,7 @@
 package com.example.solitarefore_ink
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -10,20 +11,43 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-class SolitaireViewModel : ViewModel() {
+class SolitaireViewModel(application: Application) : AndroidViewModel(application) {
     private val _state = MutableStateFlow(GameState())
     val state: StateFlow<GameState> = _state.asStateFlow()
     
+    private val persistenceManager = PersistenceManager(application)
     private var timerJob: Job? = null
+    private var autoCompleteJob: Job? = null
     
     // Stack to keep track of previous states for the Undo feature
     private val history = mutableListOf<GameState>()
 
     init {
-        startNewGame()
+        val savedState = persistenceManager.loadGameState()
+        val (savedDrawMode, savedCardBackStyle, savedAutoPlace, savedAutoComplete) = persistenceManager.loadSettings()
+        
+        if (savedState != null) {
+            _state.value = savedState.copy(
+                drawMode = savedDrawMode,
+                cardBackStyle = savedCardBackStyle,
+                autoPlace = savedAutoPlace,
+                autoComplete = savedAutoComplete
+            )
+            startTimer()
+        } else {
+            // First time or cleared
+            _state.value = _state.value.copy(
+                drawMode = savedDrawMode,
+                cardBackStyle = savedCardBackStyle,
+                autoPlace = savedAutoPlace,
+                autoComplete = savedAutoComplete
+            )
+            startNewGame()
+        }
     }
 
     fun startNewGame() {
+        autoCompleteJob?.cancel()
         history.clear()
         val deck = DeckManager.createDeck().toMutableList()
         val newTableau = List(7) { mutableListOf<Card>() }
@@ -39,21 +63,24 @@ class SolitaireViewModel : ViewModel() {
             }
         }
 
-        _state.update { currentState ->
-            GameState(
-                stock = deck,
-                waste = emptyList(),
-                foundation = List(4) { emptyList() },
-                tableau = newTableau,
-                isGameWon = false,
-                hintedCardId = null,
-                drawMode = currentState.drawMode,
-                cardBackStyle = currentState.cardBackStyle,
-                score = 0,
-                elapsedSeconds = 0,
-                recycleCount = 0
-            )
-        }
+        val currentState = _state.value
+        val newState = GameState(
+            stock = deck,
+            waste = emptyList(),
+            foundation = List(4) { emptyList() },
+            tableau = newTableau,
+            isGameWon = false,
+            hintedCardId = null,
+            drawMode = currentState.drawMode,
+            cardBackStyle = currentState.cardBackStyle,
+            autoPlace = currentState.autoPlace,
+            autoComplete = currentState.autoComplete,
+            score = 0,
+            elapsedSeconds = 0,
+            recycleCount = 0
+        )
+        _state.value = newState
+        persistenceManager.saveGameState(newState)
         startTimer()
     }
 
@@ -75,12 +102,13 @@ class SolitaireViewModel : ViewModel() {
     }
 
     fun undo() {
+        autoCompleteJob?.cancel()
         if (history.isNotEmpty()) {
             val previousState = history.removeAt(history.size - 1)
             // Restore everything except the elapsed time so the timer doesn't jump backwards weirdly
-            _state.update { currentState ->
-                previousState.copy(elapsedSeconds = currentState.elapsedSeconds)
-            }
+            val newState = previousState.copy(elapsedSeconds = _state.value.elapsedSeconds)
+            _state.value = newState
+            persistenceManager.saveGameState(newState)
         }
     }
 
@@ -98,7 +126,12 @@ class SolitaireViewModel : ViewModel() {
                         } else {
                             currentState.score
                         }
-                        currentState.copy(elapsedSeconds = newSeconds, score = newScore)
+                        val newState = currentState.copy(elapsedSeconds = newSeconds, score = newScore)
+                        // Periodically save state to handle abrupt app closure
+                        if (newSeconds % 10 == 0) {
+                            persistenceManager.saveGameState(newState)
+                        }
+                        newState
                     } else currentState
                 }
             }
@@ -118,7 +151,9 @@ class SolitaireViewModel : ViewModel() {
             val drawnCards = currentState.stock.takeLast(cardsToDrawCount).reversed()
             val newStock = currentState.stock.dropLast(cardsToDrawCount)
             val newWaste = currentState.waste + drawnCards.map { it.apply { isFaceUp = true } }
-            _state.value = currentState.copy(stock = newStock, waste = newWaste, hintedCardId = null)
+            val newState = currentState.copy(stock = newStock, waste = newWaste, hintedCardId = null, selectedCard = null)
+            _state.value = newState
+            persistenceManager.saveGameState(newState)
         } else if (currentState.waste.isNotEmpty()) {
             saveStateToHistory()
             // Recycle waste to stock
@@ -134,15 +169,18 @@ class SolitaireViewModel : ViewModel() {
                 }
             }
             
-            _state.value = currentState.copy(
+            val newState = currentState.copy(
                 stock = newStock, 
                 waste = emptyList(), 
                 hintedCardId = null,
+                selectedCard = null,
                 score = newScore,
                 recycleCount = newRecycleCount
             )
+            _state.value = newState
+            persistenceManager.saveGameState(newState)
         } else {
-            _state.value = currentState.copy(hintedCardId = null)
+            _state.value = currentState.copy(hintedCardId = null, selectedCard = null)
         }
     }
 
@@ -174,13 +212,16 @@ class SolitaireViewModel : ViewModel() {
         for (i in 0 until 4) {
             if (canMoveToFoundation(card, clearHintState.foundation[i])) {
                 saveStateToHistory()
-                _state.value = moveCardImplementation(clearHintState, sourcePileType, sourcePileIndex, PileType.FOUNDATION, i, 1)
+                val newState = moveCardImplementation(clearHintState, sourcePileType, sourcePileIndex, PileType.FOUNDATION, i, 1)
+                _state.value = newState
+                persistenceManager.saveGameState(newState)
+                checkAndTriggerAutoComplete()
                 return
             }
         }
 
         // If not foundation, try tableau
-        val cardsToMove = getCardsToMove(clearHintState, sourcePileType, sourcePileIndex, card)
+        val cardsToMove = getCardsToMove(clearHintState, sourcePileType, sourcePileIndex, targetCard = card)
         if (cardsToMove.isEmpty()) {
             _state.value = clearHintState
             return
@@ -192,7 +233,10 @@ class SolitaireViewModel : ViewModel() {
             if (sourcePileType == PileType.TABLEAU && i == sourcePileIndex) continue
             if (canMoveToTableau(bottomCardOfStack, clearHintState.tableau[i])) {
                  saveStateToHistory()
-                 _state.value = moveCardImplementation(clearHintState, sourcePileType, sourcePileIndex, PileType.TABLEAU, i, cardsToMove.size)
+                 val newState = moveCardImplementation(clearHintState, sourcePileType, sourcePileIndex, PileType.TABLEAU, i, cardsToMove.size)
+                 _state.value = newState
+                 persistenceManager.saveGameState(newState)
+                 checkAndTriggerAutoComplete()
                  return
             }
         }
@@ -271,6 +315,7 @@ class SolitaireViewModel : ViewModel() {
         val isWon = checkWinCondition(newFoundation)
         if (isWon) {
             timerJob?.cancel()
+            persistenceManager.clearGameState()
         }
 
         return state.copy(
@@ -325,7 +370,7 @@ class SolitaireViewModel : ViewModel() {
             }
         }
 
-        _state.update { it.copy(hintedCardId = hintedCard?.id) }
+        _state.update { it.copy(hintedCardId = hintedCard?.id, selectedCard = null) }
     }
 
     private fun canMoveToAnyFoundation(card: Card, foundations: List<List<Card>>): Boolean {
@@ -342,15 +387,202 @@ class SolitaireViewModel : ViewModel() {
 
     fun updateDrawMode(mode: Int) {
         _state.update { it.copy(drawMode = mode) }
+        persistenceManager.saveSettings(mode, _state.value.cardBackStyle, _state.value.autoPlace, _state.value.autoComplete)
     }
 
     fun updateCardBackStyle(style: CardBackStyle) {
         _state.update { it.copy(cardBackStyle = style) }
+        persistenceManager.saveSettings(_state.value.drawMode, style, _state.value.autoPlace, _state.value.autoComplete)
+    }
+
+    fun updateAutoPlace(autoPlace: Boolean) {
+        _state.update { it.copy(autoPlace = autoPlace, selectedCard = null) }
+        persistenceManager.saveSettings(_state.value.drawMode, _state.value.cardBackStyle, autoPlace, _state.value.autoComplete)
+    }
+
+    fun updateAutoComplete(autoComplete: Boolean) {
+        _state.update { it.copy(autoComplete = autoComplete) }
+        persistenceManager.saveSettings(_state.value.drawMode, _state.value.cardBackStyle, _state.value.autoPlace, autoComplete)
+        if (autoComplete) {
+            checkAndTriggerAutoComplete()
+        }
+    }
+
+    fun checkAndTriggerAutoComplete() {
+        val currentState = _state.value
+        if (!currentState.autoComplete) return
+        if (currentState.isGameWon) return
+        if (currentState.stock.isNotEmpty() || currentState.waste.isNotEmpty()) return
+        if (currentState.tableau.all { it.isEmpty() }) return
+        if (!currentState.tableau.all { pile -> pile.all { it.isFaceUp } }) return
+
+        saveStateToHistory()
+
+        autoCompleteJob?.cancel()
+        autoCompleteJob = viewModelScope.launch {
+            var movedAny = true
+            val maxLoops = 1000
+            var loopCount = 0
+
+            while (movedAny && !_state.value.isGameWon && loopCount < maxLoops) {
+                movedAny = false
+                loopCount++
+                
+                var sourcePileIndex = -1
+                var destFoundationIndex = -1
+                var cardToMove: Card? = null
+                
+                val state = _state.value
+                for (i in 0 until 7) {
+                    val pile = state.tableau[i]
+                    if (pile.isNotEmpty()) {
+                        val card = pile.last()
+                        for (j in 0 until 4) {
+                            if (canMoveToFoundation(card, state.foundation[j])) {
+                                sourcePileIndex = i
+                                destFoundationIndex = j
+                                cardToMove = card
+                                break
+                            }
+                        }
+                    }
+                    if (cardToMove != null) break
+                }
+                
+                if (cardToMove != null && sourcePileIndex != -1 && destFoundationIndex != -1) {
+                    _state.update { currState ->
+                        moveCardImplementation(
+                            state = currState,
+                            sourceType = PileType.TABLEAU,
+                            sourceIndex = sourcePileIndex,
+                            destType = PileType.FOUNDATION,
+                            destIndex = destFoundationIndex,
+                            count = 1
+                        )
+                    }
+                    persistenceManager.saveGameState(_state.value)
+                    movedAny = true
+                    delay(150)
+                }
+            }
+        }
+    }
+
+    fun handleCardClick(card: Card, pileType: PileType, pileIndex: Int = -1) {
+        if (_state.value.autoPlace) {
+            autoMoveCard(card, pileType, pileIndex)
+        } else {
+            selectOrMoveCard(card, pileType, pileIndex)
+        }
+    }
+
+    fun handleEmptySlotClick(pileType: PileType, pileIndex: Int) {
+        if (!_state.value.autoPlace) {
+            selectOrMoveCard(null, pileType, pileIndex)
+        }
+    }
+
+    private fun findCardById(cardId: String, pileType: PileType, pileIndex: Int): Card? {
+        val state = _state.value
+        return when (pileType) {
+            PileType.STOCK -> state.stock.find { it.id == cardId }
+            PileType.WASTE -> state.waste.find { it.id == cardId }
+            PileType.FOUNDATION -> state.foundation.getOrNull(pileIndex)?.find { it.id == cardId }
+            PileType.TABLEAU -> state.tableau.getOrNull(pileIndex)?.find { it.id == cardId }
+        }
+    }
+
+    private fun isCardSelectable(card: Card, pileType: PileType, pileIndex: Int): Boolean {
+        val state = _state.value
+        return when (pileType) {
+            PileType.STOCK -> false
+            PileType.WASTE -> state.waste.isNotEmpty() && state.waste.last() == card
+            PileType.FOUNDATION -> {
+                val pile = state.foundation.getOrNull(pileIndex)
+                pile != null && pile.isNotEmpty() && pile.last() == card
+            }
+            PileType.TABLEAU -> card.isFaceUp
+        }
+    }
+
+    fun selectOrMoveCard(card: Card?, pileType: PileType, pileIndex: Int) {
+        val currentState = _state.value
+        val selected = currentState.selectedCard
+
+        if (selected == null) {
+            if (card != null && isCardSelectable(card, pileType, pileIndex)) {
+                _state.update { it.copy(selectedCard = SelectedCardInfo(card.id, pileType, pileIndex), hintedCardId = null) }
+            }
+        } else {
+            if (card != null && card.id == selected.cardId) {
+                _state.update { it.copy(selectedCard = null) }
+                return
+            }
+
+            val sourceCard = findCardById(selected.cardId, selected.sourcePileType, selected.sourcePileIndex)
+            if (sourceCard == null) {
+                _state.update { it.copy(selectedCard = null) }
+                return
+            }
+
+            val cardsToMove = getCardsToMove(currentState, selected.sourcePileType, selected.sourcePileIndex, sourceCard)
+            if (cardsToMove.isEmpty()) {
+                _state.update { it.copy(selectedCard = null) }
+                return
+            }
+
+            val bottomCardOfStack = cardsToMove.first()
+            var moved = false
+
+            if (pileType == PileType.FOUNDATION) {
+                if (cardsToMove.size == 1 && canMoveToFoundation(bottomCardOfStack, currentState.foundation[pileIndex])) {
+                    saveStateToHistory()
+                    val newState = moveCardImplementation(
+                        currentState.copy(selectedCard = null, hintedCardId = null),
+                        selected.sourcePileType,
+                        selected.sourcePileIndex,
+                        PileType.FOUNDATION,
+                        pileIndex,
+                        1
+                    )
+                    _state.value = newState
+                    persistenceManager.saveGameState(newState)
+                    moved = true
+                    checkAndTriggerAutoComplete()
+                }
+            } else if (pileType == PileType.TABLEAU) {
+                if (canMoveToTableau(bottomCardOfStack, currentState.tableau[pileIndex])) {
+                    saveStateToHistory()
+                    val newState = moveCardImplementation(
+                        currentState.copy(selectedCard = null, hintedCardId = null),
+                        selected.sourcePileType,
+                        selected.sourcePileIndex,
+                        PileType.TABLEAU,
+                        pileIndex,
+                        cardsToMove.size
+                    )
+                    _state.value = newState
+                    persistenceManager.saveGameState(newState)
+                    moved = true
+                    checkAndTriggerAutoComplete()
+                }
+            }
+
+            if (!moved) {
+                if (card != null && isCardSelectable(card, pileType, pileIndex)) {
+                    _state.update { it.copy(selectedCard = SelectedCardInfo(card.id, pileType, pileIndex), hintedCardId = null) }
+                }
+            }
+        }
     }
 
     override fun onCleared() {
         super.onCleared()
         timerJob?.cancel()
+        // Final save on clearing
+        if (!_state.value.isGameWon) {
+            persistenceManager.saveGameState(_state.value)
+        }
     }
 }
 

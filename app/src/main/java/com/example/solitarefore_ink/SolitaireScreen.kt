@@ -22,6 +22,10 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,7 +60,14 @@ fun Modifier.noRippleClickable(onClick: () -> Unit): Modifier = composed {
 fun SolitaireScreen(viewModel: SolitaireViewModel = viewModel()) {
     val state by viewModel.state.collectAsState()
     var showSettingsDialog by remember { mutableStateOf(false) }
+    var showVictoryDialog by remember { mutableStateOf(false) }
     val configuration = LocalConfiguration.current
+
+    LaunchedEffect(state.isGameWon) {
+        if (state.isGameWon) {
+            showVictoryDialog = true
+        }
+    }
 
     if (configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
         LandscapeSolitaireLayout(state, viewModel, { showSettingsDialog = true })
@@ -68,9 +79,25 @@ fun SolitaireScreen(viewModel: SolitaireViewModel = viewModel()) {
         SettingsDialog(
             currentDrawMode = state.drawMode,
             currentBackStyle = state.cardBackStyle,
+            currentAutoPlace = state.autoPlace,
+            currentAutoComplete = state.autoComplete,
             onDismiss = { showSettingsDialog = false },
             onDrawModeChanged = { viewModel.updateDrawMode(it) },
-            onBackStyleChanged = { viewModel.updateCardBackStyle(it) }
+            onBackStyleChanged = { viewModel.updateCardBackStyle(it) },
+            onAutoPlaceChanged = { viewModel.updateAutoPlace(it) },
+            onAutoCompleteChanged = { viewModel.updateAutoComplete(it) }
+        )
+    }
+
+    if (showVictoryDialog) {
+        VictoryDialog(
+            score = state.score,
+            elapsedSeconds = state.elapsedSeconds,
+            onNewGame = {
+                showVictoryDialog = false
+                viewModel.startNewGame()
+            },
+            onDismiss = { showVictoryDialog = false }
         )
     }
 }
@@ -164,15 +191,18 @@ fun PortraitSolitaireLayout(state: GameState, viewModel: SolitaireViewModel, onS
                                     .offset(x = (index * (cardWidth.value * 0.25f)).dp) // Offset horizontally
                                     .then(
                                         if (isTopCard) {
-                                            Modifier.noRippleClickable { viewModel.autoMoveCard(card, PileType.WASTE) }
+                                            Modifier.noRippleClickable { viewModel.handleCardClick(card, PileType.WASTE) }
                                         } else {
                                             Modifier
                                         }
                                     )
                                 
+                                val isSelected = state.isCardSelected(card, PileType.WASTE, -1)
+                                val isHighlighted = (isTopCard && card.id == state.hintedCardId) || isSelected
+
                                 CardItem(
                                     card = card,
-                                    isHinted = isTopCard && card.id == state.hintedCardId,
+                                    isHinted = isHighlighted,
                                     cardWidth = cardWidth,
                                     cardHeight = cardHeight,
                                     smallFontSize = smallFontSize,
@@ -195,17 +225,23 @@ fun PortraitSolitaireLayout(state: GameState, viewModel: SolitaireViewModel, onS
                         val pile = state.foundation[i]
                         if (pile.isNotEmpty()) {
                             val topCard = pile.last()
+                            val isSelected = state.isCardSelected(topCard, PileType.FOUNDATION, i)
+                            val isHighlighted = topCard.id == state.hintedCardId || isSelected
                             CardItem(
                                 card = topCard,
-                                isHinted = topCard.id == state.hintedCardId,
+                                isHinted = isHighlighted,
                                 cardWidth = cardWidth,
                                 cardHeight = cardHeight,
                                 smallFontSize = smallFontSize,
                                 largeFontSize = largeFontSize,
-                                modifier = Modifier.noRippleClickable { viewModel.autoMoveCard(topCard, PileType.FOUNDATION, i) }
+                                modifier = Modifier.noRippleClickable { viewModel.handleCardClick(topCard, PileType.FOUNDATION, i) }
                             )
                         } else {
-                            EmptyCardSlot(cardWidth, cardHeight)
+                            EmptyCardSlot(
+                                cardWidth = cardWidth,
+                                cardHeight = cardHeight,
+                                modifier = Modifier.noRippleClickable { viewModel.handleEmptySlotClick(PileType.FOUNDATION, i) }
+                            )
                         }
                     }
                 }
@@ -222,20 +258,26 @@ fun PortraitSolitaireLayout(state: GameState, viewModel: SolitaireViewModel, onS
                     val pile = state.tableau[i]
                     Box(modifier = Modifier.width(cardWidth).fillMaxHeight()) {
                         if (pile.isEmpty()) {
-                            EmptyCardSlot(cardWidth, cardHeight)
+                            EmptyCardSlot(
+                                cardWidth = cardWidth,
+                                cardHeight = cardHeight,
+                                modifier = Modifier.noRippleClickable { viewModel.handleEmptySlotClick(PileType.TABLEAU, i) }
+                            )
                         } else {
                             pile.forEachIndexed { index, card ->
                                 val modifier = Modifier
                                     .offset(y = verticalOffset * index)
                                     .noRippleClickable {
                                         if (card.isFaceUp) {
-                                            viewModel.autoMoveCard(card, PileType.TABLEAU, i)
+                                            viewModel.handleCardClick(card, PileType.TABLEAU, i)
                                         }
                                     }
                                 if (card.isFaceUp) {
+                                    val isSelected = state.isCardSelected(card, PileType.TABLEAU, i)
+                                    val isHighlighted = card.id == state.hintedCardId || isSelected
                                     CardItem(
                                         card = card,
-                                        isHinted = card.id == state.hintedCardId,
+                                        isHinted = isHighlighted,
                                         cardWidth = cardWidth, 
                                         cardHeight = cardHeight, 
                                         smallFontSize = smallFontSize, 
@@ -338,8 +380,10 @@ fun LandscapeSolitaireLayout(state: GameState, viewModel: SolitaireViewModel, on
                             val isTopCard = index == cardsToShow.size - 1
                             val modifier = Modifier
                                 .offset(x = (index * (cardWidth.value * 0.25f)).dp)
-                                .then(if (isTopCard) Modifier.noRippleClickable { viewModel.autoMoveCard(card, PileType.WASTE) } else Modifier)
-                            CardItem(card, isTopCard && card.id == state.hintedCardId, cardWidth, cardHeight, smallFontSize, largeFontSize, modifier)
+                                .then(if (isTopCard) Modifier.noRippleClickable { viewModel.handleCardClick(card, PileType.WASTE) } else Modifier)
+                            val isSelected = state.isCardSelected(card, PileType.WASTE, -1)
+                            val isHighlighted = (isTopCard && card.id == state.hintedCardId) || isSelected
+                            CardItem(card, isHighlighted, cardWidth, cardHeight, smallFontSize, largeFontSize, modifier)
                         }
                     }
                 } else {
@@ -354,6 +398,17 @@ fun LandscapeSolitaireLayout(state: GameState, viewModel: SolitaireViewModel, on
                 Text(timeString, color = PureBlack, fontSize = 14.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
                 Spacer(modifier = Modifier.height(8.dp))
                 Text("分数:\n${state.score}", color = PureBlack, fontSize = 14.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+                if (state.isGameWon) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "YOU WIN!",
+                        color = PureBlack,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                        fontFamily = FontFamily.Serif
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.width(cardWidth * 0.2f))
@@ -367,11 +422,17 @@ fun LandscapeSolitaireLayout(state: GameState, viewModel: SolitaireViewModel, on
                     val pile = state.tableau[i]
                     Box(modifier = Modifier.width(cardWidth).fillMaxHeight()) {
                         if (pile.isEmpty()) {
-                            EmptyCardSlot(cardWidth, cardHeight)
+                            EmptyCardSlot(
+                                cardWidth = cardWidth,
+                                cardHeight = cardHeight,
+                                modifier = Modifier.noRippleClickable { viewModel.handleEmptySlotClick(PileType.TABLEAU, i) }
+                            )
                         } else {
                             pile.forEachIndexed { index, card ->
-                                val mod = Modifier.offset(y = verticalOffset * index).noRippleClickable { if (card.isFaceUp) viewModel.autoMoveCard(card, PileType.TABLEAU, i) }
-                                if (card.isFaceUp) CardItem(card, card.id == state.hintedCardId, cardWidth, cardHeight, smallFontSize, largeFontSize, mod)
+                                val isSelected = state.isCardSelected(card, PileType.TABLEAU, i)
+                                val isHighlighted = card.id == state.hintedCardId || isSelected
+                                val mod = Modifier.offset(y = verticalOffset * index).noRippleClickable { if (card.isFaceUp) viewModel.handleCardClick(card, PileType.TABLEAU, i) }
+                                if (card.isFaceUp) CardItem(card, isHighlighted, cardWidth, cardHeight, smallFontSize, largeFontSize, mod)
                                 else CardBack(cardWidth, cardHeight, state.cardBackStyle, mod)
                             }
                         }
@@ -391,9 +452,15 @@ fun LandscapeSolitaireLayout(state: GameState, viewModel: SolitaireViewModel, on
                     val pile = state.foundation[i]
                     if (pile.isNotEmpty()) {
                         val topCard = pile.last()
-                        CardItem(topCard, topCard.id == state.hintedCardId, cardWidth, cardHeight, smallFontSize, largeFontSize, Modifier.noRippleClickable { viewModel.autoMoveCard(topCard, PileType.FOUNDATION, i) })
+                        val isSelected = state.isCardSelected(topCard, PileType.FOUNDATION, i)
+                        val isHighlighted = topCard.id == state.hintedCardId || isSelected
+                        CardItem(topCard, isHighlighted, cardWidth, cardHeight, smallFontSize, largeFontSize, Modifier.noRippleClickable { viewModel.handleCardClick(topCard, PileType.FOUNDATION, i) })
                     } else {
-                        EmptyCardSlot(cardWidth, cardHeight)
+                        EmptyCardSlot(
+                            cardWidth = cardWidth,
+                            cardHeight = cardHeight,
+                            modifier = Modifier.noRippleClickable { viewModel.handleEmptySlotClick(PileType.FOUNDATION, i) }
+                        )
                     }
                 }
             }
@@ -428,9 +495,13 @@ fun TopBarButton(icon: androidx.compose.ui.graphics.vector.ImageVector, text: St
 fun SettingsDialog(
     currentDrawMode: Int,
     currentBackStyle: CardBackStyle,
+    currentAutoPlace: Boolean,
+    currentAutoComplete: Boolean,
     onDismiss: () -> Unit,
     onDrawModeChanged: (Int) -> Unit,
-    onBackStyleChanged: (CardBackStyle) -> Unit
+    onBackStyleChanged: (CardBackStyle) -> Unit,
+    onAutoPlaceChanged: (Boolean) -> Unit,
+    onAutoCompleteChanged: (Boolean) -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -461,6 +532,44 @@ fun SettingsDialog(
                     Text("每次 3 张")
                 }
                 
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text(text = "放牌方式", fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(
+                        selected = currentAutoPlace,
+                        onClick = { onAutoPlaceChanged(true) },
+                        colors = RadioButtonDefaults.colors(selectedColor = PureBlack, unselectedColor = PureBlack)
+                    )
+                    Text("自动放牌")
+                    Spacer(modifier = Modifier.width(16.dp))
+                    RadioButton(
+                        selected = !currentAutoPlace,
+                        onClick = { onAutoPlaceChanged(false) },
+                        colors = RadioButtonDefaults.colors(selectedColor = PureBlack, unselectedColor = PureBlack)
+                    )
+                    Text("手动放牌")
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text(text = "自动整理", fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(
+                        selected = currentAutoComplete,
+                        onClick = { onAutoCompleteChanged(true) },
+                        colors = RadioButtonDefaults.colors(selectedColor = PureBlack, unselectedColor = PureBlack)
+                    )
+                    Text("开启")
+                    Spacer(modifier = Modifier.width(16.dp))
+                    RadioButton(
+                        selected = !currentAutoComplete,
+                        onClick = { onAutoCompleteChanged(false) },
+                        colors = RadioButtonDefaults.colors(selectedColor = PureBlack, unselectedColor = PureBlack)
+                    )
+                    Text("关闭")
+                }
+
                 Spacer(modifier = Modifier.height(16.dp))
                 
                 Text(text = "牌背纹理", fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 8.dp))
@@ -503,6 +612,83 @@ fun SettingsDialog(
 }
 
 @Composable
+fun VictoryDialog(
+    score: Int,
+    elapsedSeconds: Int,
+    onNewGame: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val minutes = elapsedSeconds / 60
+    val seconds = elapsedSeconds % 60
+    val timeString = String.format(java.util.Locale.getDefault(), "%02d:%02d", minutes, seconds)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = PureWhite,
+        titleContentColor = PureBlack,
+        textContentColor = PureBlack,
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.border(2.dp, PureBlack, RoundedCornerShape(8.dp)),
+        title = {
+            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text(
+                    text = "YOU WIN!",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 28.sp,
+                    fontFamily = FontFamily.Serif
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "恭喜你赢得了本局游戏！",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(text = "游戏耗时", fontSize = 12.sp, color = Color.Gray)
+                        Text(text = timeString, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(text = "最终分数", fontSize = 12.sp, color = Color.Gray)
+                        Text(text = "$score", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onNewGame,
+                colors = ButtonDefaults.buttonColors(containerColor = PureBlack, contentColor = PureWhite),
+                shape = RoundedCornerShape(4.dp),
+                modifier = Modifier.padding(end = 8.dp)
+            ) {
+                Text("新游戏", fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            OutlinedButton(
+                onClick = onDismiss,
+                border = BorderStroke(1.dp, PureBlack),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = PureBlack),
+                shape = RoundedCornerShape(4.dp)
+            ) {
+                Text("查看牌局", fontWeight = FontWeight.Bold)
+            }
+        }
+    )
+}
+
+@Composable
 fun CardItem(
     card: Card,
     isHinted: Boolean,
@@ -512,8 +698,8 @@ fun CardItem(
     largeFontSize: TextUnit,
     modifier: Modifier = Modifier
 ) {
-    val bgColor = if (isHinted) PureBlack else PureWhite
-    val fgColor = if (isHinted) PureWhite else PureBlack
+    val bgColor = PureWhite
+    val fgColor = PureBlack
 
     Box(
         modifier = modifier
@@ -521,7 +707,7 @@ fun CardItem(
             .height(cardHeight)
             .clip(RoundedCornerShape(4.dp))
             .background(bgColor)
-            .border(1.dp, fgColor, RoundedCornerShape(4.dp))
+            .border(if (isHinted) 3.dp else 1.dp, PureBlack, RoundedCornerShape(4.dp))
             .padding(2.dp)
     ) {
         Row(
